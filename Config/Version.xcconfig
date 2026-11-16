@@ -1,0 +1,11 @@
+// The one place the app's version lives. project.yml reads this file for
+// both Debug and Release builds, and scripts/dist.sh checks the finished app
+// against it. Change the numbers here and nowhere else.
+//
+// MARKETING_VERSION is the version people see (shown in About and used in
+// the disk image's name, Umbra-<version>.dmg).
+// CURRENT_PROJECT_VERSION is a build counter: a whole number that goes up
+// by one with every released build, even a rebuild of the same version.
+
+MARKETING_VERSION = 0.1.1
+CURRENT_PROJECT_VERSION = 1

@@ -1,0 +1,3142 @@
+openapi: 3.0.3
+info:
+  title: Umbra API
+  version: "1"
+  description: |
+    Umbra's native API, used by its own web UI. This file is the source of
+    truth: `just gen` generates the Go server types and the TypeScript
+    client types from it. Never edit the generated code by hand.
+
+    Authentication: a browser session cookie (after signing in), or an API
+    key in the `X-Api-Key` header or the `apikey` query parameter. Requests
+    from addresses on the bypass list need neither. Endpoints marked
+    `security: []` are open to everyone.
+
+    Endpoints are added as each screen is built (docs/ui-plan.md). When the
+    torrent engine can't run (a busy port, a VPN that can't start) the
+    torrent endpoints answer 503 with the reason.
+
+    The qBittorrent-compatible API (/api/v2, for Radarr, Sonarr and other
+    apps) is separate and not described here: its contract is the traffic
+    recorded from a real qBittorrent in testdata/qbt/, and apps sign in to
+    it with the app password (SecuritySettings.appPassword), which opens
+    nothing in this API.
+servers:
+  - url: /api/v1
+
+security:
+  - session: []
+  - apiKeyHeader: []
+  - apiKeyQuery: []
+
+tags:
+  - name: auth
+  - name: create
+  - name: me
+  - name: settings
+  - name: system
+  - name: torrents
+  - name: transfer
+  - name: vpn
+
+paths:
+  /auth/state:
+    get:
+      tags: [auth]
+      operationId: getAuthState
+      summary: What the sign-in page needs to know
+      description: |
+        Tells the UI whether first-run setup is needed, which sign-in
+        methods are on, and whether this request is already signed in.
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthState" }
+
+  /auth/setup:
+    post:
+      tags: [auth]
+      operationId: setup
+      summary: Create the first account
+      description: Only works while no account exists. Signs the new account in.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Credentials" }
+      responses:
+        "204":
+          description: Account created and signed in. Sets the session cookie.
+        "409":
+          description: An account already exists.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /auth/login:
+    post:
+      tags: [auth]
+      operationId: login
+      summary: Sign in with username and password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Credentials" }
+      responses:
+        "204":
+          description: Signed in. Sets the session cookie.
+        "401":
+          description: Wrong username or password.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403":
+          description: Password sign-in is turned off.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429":
+          description: Too many failed attempts; see Retry-After.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /auth/logout:
+    post:
+      tags: [auth]
+      operationId: logout
+      summary: Sign out this browser
+      security: []
+      responses:
+        "204":
+          description: Signed out. Clears the session cookie.
+
+  /auth/sso/start:
+    get:
+      tags: [auth]
+      operationId: ssoStart
+      summary: Go to the single sign-on provider (a browser navigation)
+      description: |
+        Redirects to the provider. With `link`, links the provider account
+        to the signed-in Umbra account instead of signing in (Settings →
+        Security). Problems redirect back with `?sso=` (see the callback).
+      security: []
+      parameters:
+        - name: link
+          in: query
+          schema: { type: boolean }
+      responses:
+        "302":
+          description: To the provider, or back with a problem.
+
+  /auth/sso/callback:
+    get:
+      tags: [auth]
+      operationId: ssoCallback
+      summary: Where the provider sends the browser back
+      description: |
+        Register this address with the provider (Settings → Security shows
+        it as `redirectUri`). Redirects to the app when signed in, or to
+        the sign-in page (Settings → Security for a link) with `?sso=` and
+        one of: `linked`, `off`, `expired` (took too long, or started in
+        another browser), `not_linked`, `not_in_group`, `denied` (refused
+        at the provider), `failed` (with `detail`, in words).
+      security: []
+      parameters:
+        - { name: code, in: query, schema: { type: string } }
+        - { name: state, in: query, schema: { type: string } }
+        - { name: error, in: query, schema: { type: string } }
+        - { name: error_description, in: query, schema: { type: string } }
+      responses:
+        "302":
+          description: Back to Umbra.
+
+  /auth/sso/link:
+    delete:
+      tags: [auth]
+      operationId: ssoUnlink
+      summary: Unlink single sign-on from this account
+      responses:
+        "204":
+          description: Unlinked.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: Password sign-in is off, so single sign-on is the only way in; or the request isn't from a signed-in account.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /auth/password:
+    post:
+      tags: [auth]
+      operationId: changePassword
+      summary: Change the signed-in account's password
+      description: Ends the account's other sessions; this one stays signed in.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PasswordChange" }
+      responses:
+        "204":
+          description: Changed.
+        "400":
+          description: Not signed in with an account (bypass list or API key).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: The current password is wrong.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /me/preferences:
+    get:
+      tags: [me]
+      operationId: getPreferences
+      summary: This user's UI preferences
+      description: |
+        Requests from the bypass list or with the API key share one set.
+        A field that was never saved is left out; the UI uses its default.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Preferences" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    put:
+      tags: [me]
+      operationId: putPreferences
+      summary: Replace this user's UI preferences
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Preferences" }
+      responses:
+        "200":
+          description: Saved; the stored preferences.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Preferences" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "413":
+          description: Larger than 32 KiB.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /settings/security:
+    get:
+      tags: [settings]
+      operationId: getSecuritySettings
+      summary: Settings → Security
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SecuritySettings" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    put:
+      tags: [settings]
+      operationId: putSecuritySettings
+      summary: Save Settings → Security
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SecuritySettingsUpdate" }
+      responses:
+        "200":
+          description: Saved; the stored settings.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SecuritySettings" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /settings/sso:
+    get:
+      tags: [settings]
+      operationId: getSsoSettings
+      summary: Settings → Security's single sign-on
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SsoSettings" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    put:
+      tags: [settings]
+      operationId: putSsoSettings
+      summary: Save single sign-on
+      description: Can't turn it off while password sign-in is off.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SsoSettingsUpdate" }
+      responses:
+        "200":
+          description: Saved.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SsoSettings" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /settings/notifications:
+    get:
+      tags: [settings]
+      operationId: getNotificationsSettings
+      summary: Settings → Notifications (email)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationsSettings" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    put:
+      tags: [settings]
+      operationId: putNotificationsSettings
+      summary: Save Settings → Notifications
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NotificationsSettingsUpdate" }
+      responses:
+        "200":
+          description: Saved; the stored settings.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationsSettings" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /settings/notifications/test:
+    post:
+      tags: [settings]
+      operationId: testNotifications
+      summary: Send a test email
+      description: |
+        Sends a test email with these settings (the page's, saved or not;
+        without `password`, the stored one), and waits for the mail server's
+        answer. Nothing is saved.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NotificationsSettingsUpdate" }
+      responses:
+        "204":
+          description: Sent; the mail server took it.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "502":
+          description: The mail server couldn't be reached or refused the email; `message` says why.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /settings/security/api-key:
+    post:
+      tags: [settings]
+      operationId: regenerateApiKey
+      summary: Replace the API key
+      description: Apps using the old key stop working until given the new one.
+      responses:
+        "200":
+          description: The new key.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [apiKey]
+                properties:
+                  apiKey: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /settings/security/app-password:
+    post:
+      tags: [settings]
+      operationId: regenerateAppPassword
+      summary: Replace the app password
+      description: Apps signed in with the old one stop working until given the new one.
+      responses:
+        "200":
+          description: The new app password.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [appPassword]
+                properties:
+                  appPassword: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /settings/downloads:
+    get:
+      tags: [settings]
+      operationId: getDownloadsSettings
+      summary: Settings → Downloads
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DownloadsSettings" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    put:
+      tags: [settings]
+      operationId: putDownloadsSettings
+      summary: Save Settings → Downloads
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DownloadsSettings" }
+      responses:
+        "200":
+          description: Saved; the stored settings.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DownloadsSettings" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /settings/speed:
+    get:
+      tags: [settings]
+      operationId: getSpeedSettings
+      summary: Settings → Speed (and the top bar's limits and slow mode)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SpeedSettings" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    put:
+      tags: [settings]
+      operationId: putSpeedSettings
+      summary: Save Settings → Speed
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SpeedSettings" }
+      responses:
+        "200":
+          description: Saved; the stored settings.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SpeedSettings" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /settings/seeding:
+    get:
+      tags: [settings]
+      operationId: getSeedingSettings
+      summary: Settings → Seeding (the seed goals)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SeedingSettings" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    put:
+      tags: [settings]
+      operationId: putSeedingSettings
+      summary: Save Settings → Seeding
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SeedingSettings" }
+      responses:
+        "200":
+          description: Saved; the stored settings.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SeedingSettings" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /settings/queue:
+    get:
+      tags: [settings]
+      operationId: getQueueSettings
+      summary: Settings → Queue
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QueueSettings" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    put:
+      tags: [settings]
+      operationId: putQueueSettings
+      summary: Save Settings → Queue
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/QueueSettings" }
+      responses:
+        "200":
+          description: Saved; the stored settings.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QueueSettings" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /settings/connection:
+    get:
+      tags: [settings]
+      operationId: getConnectionSettings
+      summary: Settings → Connection
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConnectionSettings" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    put:
+      tags: [settings]
+      operationId: putConnectionSettings
+      summary: Save Settings → Connection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConnectionSettings" }
+      responses:
+        "200":
+          description: Saved; the stored settings.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConnectionSettings" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /vpn:
+    get:
+      tags: [vpn]
+      operationId: getVpn
+      summary: The VPN's state, and the addresses the world sees
+      description: |
+        With a VPN this may look up the addresses (at most every few
+        minutes; `refresh` asks now, at most once in 30 seconds). Without a
+        VPN nothing is looked up.
+      parameters:
+        - name: refresh
+          in: query
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VpnStatus" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /vpn/configs:
+    post:
+      tags: [vpn]
+      operationId: addVpn
+      summary: Save a WireGuard config
+      description: |
+        The file from the VPN provider, with a name (its server's when
+        none is given) and the port the provider forwards to it. Its
+        private key is stored encrypted and never shown again. The first
+        VPN saved is put in use straight away (releasing a hold); later
+        ones wait, so adding one never interrupts the VPN in use. At most
+        20.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [config]
+              properties:
+                config: { type: string, description: "The .conf file's text." }
+                name: { type: string, maxLength: 60 }
+                forwardedPort: { type: integer, minimum: 0, maximum: 65535 }
+      responses:
+        "201":
+          description: Saved.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VpnProfile" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /vpn/configs/{id}:
+    patch:
+      tags: [vpn]
+      operationId: editVpn
+      summary: Rename a saved VPN, set its forwarded port or replace its file
+      description: |
+        Fields left out stay as they are. The forwarded port is one set up
+        on the VPN provider's website (AirVPN: Client Area → Ports); 0 is
+        none. On the VPN in use, a new file or port restarts the engine (a
+        few seconds' pause for every torrent).
+      parameters:
+        - $ref: "#/components/parameters/VpnId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, maxLength: 60 }
+                config: { type: string, description: "A new .conf file's text." }
+                forwardedPort: { type: integer, minimum: 0, maximum: 65535 }
+      responses:
+        "204":
+          description: Saved.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/VpnNotFound" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+    delete:
+      tags: [vpn]
+      operationId: removeVpn
+      summary: Remove a saved VPN
+      description: |
+        Removing the VPN in use puts the next saved one in use. Removing
+        the last one holds every torrent (nothing runs) until "Start
+        without VPN", so it never quietly shows peers the real address.
+      parameters:
+        - $ref: "#/components/parameters/VpnId"
+      responses:
+        "204":
+          description: Removed.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/VpnNotFound" }
+
+  /vpn/configs/{id}/use:
+    post:
+      tags: [vpn]
+      operationId: useVpn
+      summary: Put a saved VPN in use
+      description: Restarts the engine behind it (a few seconds' pause for every torrent).
+      parameters:
+        - $ref: "#/components/parameters/VpnId"
+      responses:
+        "204":
+          description: In use.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/VpnNotFound" }
+
+  /vpn/order:
+    put:
+      tags: [vpn]
+      operationId: orderVpns
+      summary: Set the order switching tries the saved VPNs in
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ids]
+              properties:
+                ids:
+                  type: array
+                  description: Every saved VPN's id, once each.
+                  items: { type: string }
+      responses:
+        "204":
+          description: Saved.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /vpn/failover:
+    put:
+      tags: [vpn]
+      operationId: putVpnFailover
+      summary: Switch to the next saved VPN when the one in use is down
+      description: |
+        When the VPN in use has been down (stopped by the kill switch) for
+        `minutes`, Umbra puts the next saved one in use, going round the
+        list. It only ever picks another saved VPN, and never switches back
+        by itself.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VpnFailover" }
+      responses:
+        "204":
+          description: Saved.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /vpn/start-without:
+    post:
+      tags: [vpn]
+      operationId: startWithoutVpn
+      summary: Run without a VPN, releasing the hold
+      description: >
+        Releases the hold left by removing the last VPN, or the one a new
+        install starts with under UMBRA_HOLD_UNTIL_VPN, and remembers the
+        choice across restarts. Peers will see the computer's real address.
+      responses:
+        "204":
+          description: Released.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /system/status:
+    get:
+      tags: [system]
+      operationId: getSystemStatus
+      summary: Version and uptime
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SystemStatus" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /system/backup:
+    get:
+      tags: [system]
+      operationId: downloadBackup
+      summary: Download a backup (System → Backup)
+      description: |
+        One .tar.gz file: the settings database (accounts, sessions,
+        settings), the engine's torrent records and which pieces are good,
+        and the .torrent files; not the downloaded files. Stored passwords
+        stay encrypted with the secret key, which isn't in it. Put back with
+        `umbra restore <file>` into an empty data folder, or
+        `umbra restore --replace <file>` over a stopped Umbra. Only for
+        someone signed in with their account, or the app that started
+        Umbra (its launch token, over loopback), which can already read
+        the whole data folder: the API key and the bypass list aren't
+        enough, since the file holds the accounts.
+      responses:
+        "200":
+          description: The backup, as a file to save.
+          content:
+            application/gzip:
+              schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: Let in by the API key or the bypass list, not the account or the launch token.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503": { $ref: "#/components/responses/EngineDown" }
+
+  /logs:
+    get:
+      tags: [system]
+      operationId: getLogs
+      summary: Recent log lines, for System → Logs
+      description: |
+        Umbra keeps its last 5,000 lines at Info and above in memory (not
+        successful web requests), with secrets hidden. Lines come oldest
+        first; `more` says older ones match too (ask with `before` set to
+        the first line's `seq`). `counts` are the lines at each level that
+        match the torrent and search filters, for the level buttons.
+      parameters:
+        - $ref: "#/components/parameters/LogLevels"
+        - $ref: "#/components/parameters/LogTorrent"
+        - $ref: "#/components/parameters/LogSearch"
+        - name: before
+          in: query
+          description: Only lines older than this `seq`.
+          schema: { type: integer, format: int64 }
+        - name: limit
+          in: query
+          description: At most this many lines, the newest that match (default 500, at most 5,000).
+          schema: { type: integer }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LogPage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /logs/stream:
+    get:
+      tags: [system]
+      operationId: getLogStream
+      summary: New log lines as they are written (Server-Sent Events)
+      description: |
+        Each line is a `log` event (`LogEntry`), unfiltered: the page
+        filters what it shows. With `after`, the kept lines newer than that
+        `seq` come first, so nothing is missed between GET /logs and the
+        stream. A page that falls far behind is disconnected; it reconnects
+        with the last `seq` it has.
+      parameters:
+        - name: after
+          in: query
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: The stream.
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /logs/download:
+    get:
+      tags: [system]
+      operationId: downloadLogs
+      summary: The kept log lines as a text file
+      description: Every kept line that matches the filters, oldest first, as "umbra-log-<date>.txt".
+      parameters:
+        - $ref: "#/components/parameters/LogLevels"
+        - $ref: "#/components/parameters/LogTorrent"
+        - $ref: "#/components/parameters/LogSearch"
+      responses:
+        "200":
+          description: The file.
+          content:
+            text/plain:
+              schema: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /events:
+    get:
+      tags: [system]
+      operationId: getEvents
+      summary: Live updates (Server-Sent Events)
+      description: |
+        A text/event-stream. Each message's `event:` line is its type and
+        its `data:` line is JSON:
+
+        - `settings.changed`: `{"group": "security"}`; refetch that group.
+        - `torrents.snapshot`: `TorrentsSnapshot`, sent first on every
+          connection.
+        - `torrents.delta`: `TorrentsDelta`, about once a second while
+          anything changes. Apply it only if its `from` is the browser's
+          `rev`; otherwise fetch GET /torrents.
+        - `transfer`: `Transfer`, about once a second.
+        - `torrent.finished`: `TorrentFinished`, when a download finishes
+          while the stream is open (for the toast and the browser
+          notification). Not sent for torrents that finished meanwhile.
+        - `creations`: an array of `Creation`, about once a second while
+          a torrent is being made, and once when that changes.
+
+        A browser that falls behind is disconnected; it reconnects by itself
+        and gets a fresh snapshot.
+      responses:
+        "200":
+          description: The stream.
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /torrents:
+    get:
+      tags: [torrents]
+      operationId: listTorrents
+      summary: Every torrent, as the list shows it
+      description: |
+        The same rows as the stream's snapshot, for pages that don't keep a
+        stream open, and for a browser that missed a delta. Filtering,
+        sorting and search happen in the browser.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TorrentsSnapshot" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "503": { $ref: "#/components/responses/EngineDown" }
+    post:
+      tags: [torrents]
+      operationId: addTorrent
+      summary: Add a torrent from a magnet link or a .torrent file
+      description: |
+        Give `magnet` or `torrentFile` (the file's bytes, base64). Without
+        `savePath` it saves in its category's folder, or the default one. A
+        torrent that is already added is left as it is: the answer says so
+        (`alreadyAdded`) with its hash. A magnet link waiting in the Add
+        dialog (POST /torrents/inspect) is added in place, with these
+        choices.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AddTorrent" }
+      responses:
+        "200":
+          description: Added (or already there).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AddResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "503": { $ref: "#/components/responses/EngineDown" }
+
+  /torrents/actions:
+    post:
+      tags: [torrents]
+      operationId: torrentAction
+      summary: Pause, resume, force start, recheck, reannounce, or move torrents in the queue
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TorrentAction" }
+      responses:
+        "204":
+          description: Done.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: One of the hashes isn't a torrent Umbra has; nothing changed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503": { $ref: "#/components/responses/EngineDown" }
+
+  /torrents/remove:
+    post:
+      tags: [torrents]
+      operationId: removeTorrents
+      summary: Remove torrents, keeping or deleting their files
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RemoveTorrents" }
+      responses:
+        "204":
+          description: Removed.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: One of the hashes isn't a torrent Umbra has; nothing changed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503": { $ref: "#/components/responses/EngineDown" }
+
+  /torrents/inspect:
+    post:
+      tags: [torrents]
+      operationId: inspectTorrent
+      summary: What a torrent is, before adding it (the Add dialog)
+      description: |
+        Give one of `torrentFile`, `magnet` or `url`. Nothing is added.
+        A web address is downloaded through the engine's network (behind
+        the VPN when there is one); the answer carries the file it gave
+        (`torrentFile`), or the magnet link it redirected to, for the add
+        that follows. A magnet link's files aren't known yet
+        (`detailsKnown` is false); with `fetchDetails` Umbra starts fetching
+        them (`waiting` is then true): ask GET /torrents/inspect/{hash}
+        until they arrive. Nothing is downloaded and the torrent isn't
+        listed until it is added with POST /torrents (which can be at once,
+        "Add now"); DELETE /torrents/inspect/{hash} stops waiting, and a
+        magnet nobody adds is forgotten after an hour or a restart.
+        `existing` says Umbra has the torrent already, and which of these
+        trackers it lacks.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/InspectTorrent" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TorrentPreview" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "503": { $ref: "#/components/responses/EngineDown" }
+
+  /torrents/inspect/{hash}:
+    get:
+      tags: [torrents]
+      operationId: getWaitingTorrent
+      summary: A magnet link waiting in the Add dialog, and its files once they arrive
+      parameters:
+        - $ref: "#/components/parameters/Hash"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TorrentPreview" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: No magnet link is waiting with that hash (added, cancelled or forgotten).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503": { $ref: "#/components/responses/EngineDown" }
+    delete:
+      tags: [torrents]
+      operationId: cancelWaitingTorrent
+      summary: Stop waiting on a magnet link (the Add dialog was closed)
+      description: Never removes a torrent that was added.
+      parameters:
+        - $ref: "#/components/parameters/Hash"
+      responses:
+        "204":
+          description: Done.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: No magnet link is waiting with that hash.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503": { $ref: "#/components/responses/EngineDown" }
+
+  /torrents/category:
+    put:
+      tags: [torrents]
+      operationId: setTorrentsCategory
+      summary: Set torrents' category
+      description: |
+        `""` takes the category away. Files stay where they are; moving
+        them is POST /torrents/move.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TorrentsCategory" }
+      responses:
+        "204":
+          description: Done.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: One of the hashes isn't a torrent Umbra has; nothing changed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "503": { $ref: "#/components/responses/EngineDown" }
+
+  /torrents/tags:
+    put:
+      tags: [torrents]
+      operationId: setTorrentsTags
+      summary: Add and remove tags on torrents
+      description: |
+        Other tags stay. A tag in both lists is added. A new tag needs no
+        setting up: adding it creates it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TorrentsTags" }
+      responses:
+        "204":
+          description: Done.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: One of the hashes isn't a torrent Umbra has; nothing changed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "503": { $ref: "#/components/responses/EngineDown" }
+
+  /torrents/limits:
+    put:
+      tags: [torrents]
+      operationId: setTorrentsLimits
+      summary: Change torrents' own limits
+      description: |
+        Only the fields given change; the others stay as each torrent has
+        them. A seed goal of `null` follows the torrent's category (else
+        Settings → Seeding); a negative one is no goal for this torrent. A
+        speed of 0 is none of its own (its category's applies).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TorrentsLimits" }
+      responses:
+        "204":
+          description: Done.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: One of the hashes isn't a torrent Umbra has; nothing changed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "503": { $ref: "#/components/responses/EngineDown" }
+
+  /torrents/move:
+    post:
+      tags: [torrents]
+      operationId: moveTorrents
+      summary: Move torrents' files to another folder
+      description: |
+        The folder must exist and be writable. Moving happens in the
+        background (the list shows "moving"); a finished torrent keeps
+        seeding meanwhile. Files already in the new folder are never
+        overwritten.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MoveTorrents" }
+      responses:
+        "204":
+          description: Started.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: One of the hashes isn't a torrent Umbra has; nothing was moved.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: A torrent can't be moved now; `message` says why.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "503": { $ref: "#/components/responses/EngineDown" }
+
+  /torrents/{hash}:
+    get:
+      tags: [torrents]
+      operationId: getTorrent
+      summary: One torrent, as the list shows it
+      description: |
+        The same row as in the list and the stream, for a page opened on
+        one torrent before the stream has arrived.
+      parameters:
+        - $ref: "#/components/parameters/Hash"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Torrent" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/TorrentNotFound" }
+        "503": { $ref: "#/components/responses/EngineDown" }
+
+  /torrents/{hash}/limits:
+    get:
+      tags: [torrents]
+      operationId: getTorrentLimits
+      summary: A torrent's own limits, and the ones in force
+      parameters:
+        - $ref: "#/components/parameters/Hash"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TorrentLimits" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/TorrentNotFound" }
+        "503": { $ref: "#/components/responses/EngineDown" }
+
+  /torrents/{hash}/trackers:
+    get:
+      tags: [torrents]
+      operationId: getTorrentTrackers
+      summary: The torrent's trackers and how each is doing
+      description: |
+        For the detail panel's Trackers tab, which asks again while it is
+        open. `dht` and `pex` say whether the torrent also finds peers
+        those ways (never for a private torrent).
+      parameters:
+        - $ref: "#/components/parameters/Hash"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TrackerList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/TorrentNotFound" }
+        "503": { $ref: "#/components/responses/EngineDown" }
+
+    put:
+      tags: [torrents]
+      operationId: setTorrentTrackers
+      summary: Replace the torrent's trackers (edit and remove)
+      description: |
+        The whole list, in tiers: trackers in a lower tier are asked
+        first. Empty tiers and repeats are dropped. A running torrent
+        switches over without stopping: trackers it keeps carry on, removed
+        ones are told it stopped, new ones are asked at once.
+      parameters:
+        - $ref: "#/components/parameters/Hash"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TrackerTiers" }
+      responses:
+        "204":
+          description: Done.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/TorrentNotFound" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "503": { $ref: "#/components/responses/EngineDown" }
+    post:
+      tags: [torrents]
+      operationId: addTorrentTrackers
+      summary: Add trackers to the torrent
+      description: Each new one goes in a tier of its own, after the others; ones it has already are skipped.
+      parameters:
+        - $ref: "#/components/parameters/Hash"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TrackerUrls" }
+      responses:
+        "204":
+          description: Done.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/TorrentNotFound" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "503": { $ref: "#/components/responses/EngineDown" }
+  /torrents/{hash}/peers:
+    get:
+      tags: [torrents]
+      operationId: getTorrentPeers
+      summary: The peers the torrent is connected to
+      description: |
+        For the Peers tab, which asks every 2 seconds while it is open. A
+        torrent that isn't running has none.
+      parameters:
+        - $ref: "#/components/parameters/Hash"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PeerList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/TorrentNotFound" }
+        "503": { $ref: "#/components/responses/EngineDown" }
+
+  /torrents/{hash}/data:
+    get:
+      tags: [torrents]
+      operationId: downloadTorrentData
+      summary: Download a finished torrent's files (M10)
+      description: |
+        A torrent of one file sends that file (with ranges, so it can
+        resume); a torrent of several sends "<name>.zip", made while it's
+        sent: files stored, not compressed, zip64 where needed, the
+        torrent's folder inside, skipped files left out. The zip's size is
+        known up front, but it has no ranges. Only once every file not
+        skipped is complete. Always an attachment, never shown as a page.
+      parameters:
+        - $ref: "#/components/parameters/Hash"
+        - name: check
+          in: query
+          required: false
+          schema: { type: boolean }
+          description: >-
+            Only check: everything a download would, without sending it.
+            Answers what would come (200, DownloadCheck) or why not.
+      responses:
+        "200":
+          description: The file, or the zip (or with check, what would come).
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+            application/json:
+              schema: { $ref: "#/components/schemas/DownloadCheck" }
+        "206":
+          description: Part of a single file (a range).
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/DownloadsOff" }
+        "404": { $ref: "#/components/responses/TorrentNotFound" }
+        "409": { $ref: "#/components/responses/NotDownloadable" }
+        "503": { $ref: "#/components/responses/EngineDown" }
+
+  /torrents/{hash}/files/{index}/data:
+    get:
+      tags: [torrents]
+      operationId: downloadTorrentFile
+      summary: Download one complete file of a torrent (M10)
+      description: |
+        By its index in the torrent's file order, once all of it is
+        downloaded and checked. Ranges are supported, so a browser or a
+        download manager can carry on after a dropped connection. Always
+        an attachment, never shown as a page.
+      parameters:
+        - $ref: "#/components/parameters/Hash"
+        - name: index
+          in: path
+          required: true
+          schema: { type: integer, minimum: 0 }
+        - name: check
+          in: query
+          required: false
+          schema: { type: boolean }
+          description: >-
+            Only check: everything a download would, without sending it.
+            Answers what would come (200, DownloadCheck) or why not.
+      responses:
+        "200":
+          description: The file (or with check, what would come).
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+            application/json:
+              schema: { $ref: "#/components/schemas/DownloadCheck" }
+        "206":
+          description: Part of it (a range).
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/DownloadsOff" }
+        "404":
+          description: No such torrent, or no file with that index.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409": { $ref: "#/components/responses/NotDownloadable" }
+        "503": { $ref: "#/components/responses/EngineDown" }
+
+  /torrents/{hash}/files:
+    get:
+      tags: [torrents]
+      operationId: getTorrentFiles
+      summary: The torrent's files, with progress and priority
+      description: |
+        In the torrent's file order. Empty while a magnet link is still
+        fetching its details.
+      parameters:
+        - $ref: "#/components/parameters/Hash"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FileList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/TorrentNotFound" }
+        "503": { $ref: "#/components/responses/EngineDown" }
+    put:
+      tags: [torrents]
+      operationId: setTorrentFilePriorities
+      summary: Set the priority of some of a torrent's files
+      description: |
+        Files not named keep theirs. `skip` doesn't download a file (a
+        finished torrent given a file it lacks downloads again).
+      parameters:
+        - $ref: "#/components/parameters/Hash"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FilePriorities" }
+      responses:
+        "204":
+          description: Done.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/TorrentNotFound" }
+        "409":
+          description: The files aren't known yet (a magnet link still fetching its details), or there's no file with that index.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "503": { $ref: "#/components/responses/EngineDown" }
+
+  /torrents/{hash}/magnet:
+    get:
+      tags: [torrents]
+      operationId: getTorrentMagnet
+      summary: The torrent's magnet link, for "Copy magnet link"
+      parameters:
+        - $ref: "#/components/parameters/Hash"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MagnetLink" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/TorrentNotFound" }
+        "503": { $ref: "#/components/responses/EngineDown" }
+
+  /torrents/{hash}/file:
+    get:
+      tags: [torrents]
+      operationId: exportTorrentFile
+      summary: The .torrent file, for "Export .torrent"
+      description: Downloads as "<name>.torrent".
+      parameters:
+        - $ref: "#/components/parameters/Hash"
+      responses:
+        "200":
+          description: The .torrent file.
+          content:
+            application/x-bittorrent:
+              schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/TorrentNotFound" }
+        "409":
+          description: A magnet link that hasn't fetched its details yet has no .torrent file.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503": { $ref: "#/components/responses/EngineDown" }
+
+  /folders:
+    get:
+      tags: [create]
+      operationId: listFolder
+      summary: What's in a folder, for choosing what to share (Create torrent)
+      description: |
+        Only the download folder, the categories' folders and what's
+        inside them can be listed: with no `path`, the answer is those
+        folders themselves. Folders come first, then files with their
+        sizes. Hidden files and folders (names starting with a dot) and
+        links aren't listed: they can't be shared.
+      parameters:
+        - name: path
+          in: query
+          description: A full path inside one of the folders; empty lists the folders.
+          schema: { type: string }
+      responses:
+        "200":
+          description: The folder's contents.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FolderListing" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /creations/preview:
+    post:
+      tags: [create]
+      operationId: previewCreation
+      summary: What a torrent would hold, for the dialog's summary
+      description: |
+        For a path on the server, or the total size of files about to be
+        uploaded: how many files, their size, and the pieces (with
+        Automatic, the piece size Umbra would choose). Nothing is read.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                path:
+                  type: string
+                  description: >
+                    A file or folder on the server, as a full path, inside the
+                    download folder or a category's folder. With
+                    UMBRA_SHARE_ANYWHERE on (the Mac app), the app that
+                    started Umbra (its launch token, no one else) may name one
+                    anywhere on the computer except Umbra's own data folder.
+                size: { type: integer, format: int64, minimum: 0, description: "Instead of path: the upload's total size." }
+                pieceLength: { type: integer, format: int64, description: "Bytes; 0 or none is Automatic." }
+      responses:
+        "200":
+          description: The summary.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreationPreview" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /creations:
+    get:
+      tags: [create]
+      operationId: listCreations
+      summary: Torrents being made, and made (until dismissed or a restart)
+      description: |
+        Oldest first. While one is being made the live-update stream also
+        sends the list (`creations`) about once a second.
+      responses:
+        "200":
+          description: The list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Creation" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [create]
+      operationId: createTorrent
+      summary: Make a torrent
+      description: |
+        From a file or folder on the server (`path`, inside the download
+        folder or a category's folder; anywhere but Umbra's data folder for
+        the app that started Umbra, with UMBRA_SHARE_ANYWHERE) or a
+        finished upload (`upload`,
+        whose files are then moved into place). Umbra reads every file
+        once, in the background, one torrent at a time; the answer is the
+        queued creation. With `seed`, the torrent is added to the list
+        when it's made and seeds from where its files are, without
+        reading them again.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateTorrent" }
+      responses:
+        "201":
+          description: Queued.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Creation" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/UploadNotFound" }
+        "409":
+          description: The upload isn't finished (not every file has arrived).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /creations/{id}:
+    delete:
+      tags: [create]
+      operationId: removeCreation
+      summary: Cancel a torrent being made, or dismiss a made one
+      description: |
+        Cancelling stops the reading within a moment and leaves nothing
+        behind. A made torrent that's seeding stays in the list of
+        torrents; only its entry here goes.
+      parameters:
+        - $ref: "#/components/parameters/CreationId"
+      responses:
+        "204":
+          description: Gone.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/CreationNotFound" }
+
+  /creations/{id}/torrent:
+    get:
+      tags: [create]
+      operationId: downloadCreation
+      summary: The made torrent's .torrent file
+      description: Downloads as "<name>.torrent".
+      parameters:
+        - $ref: "#/components/parameters/CreationId"
+      responses:
+        "200":
+          description: The .torrent file.
+          content:
+            application/x-bittorrent:
+              schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/CreationNotFound" }
+        "409":
+          description: It isn't made yet (or it failed).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /uploads:
+    get:
+      tags: [create]
+      operationId: listUploads
+      summary: Uploads under way, with how much of each file has arrived
+      description: |
+        To carry one on after a reload: choose the same files again
+        (matched by paths and sizes) and send each from its `received`.
+        An upload with nothing new for a day is deleted.
+      responses:
+        "200":
+          description: The list, oldest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Upload" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [create]
+      operationId: startUpload
+      summary: Start sending files to make a torrent of
+      description: |
+        The files go to the default download folder or a category's,
+        and stay there (Umbra seeds from them): one file alone, or
+        everything in one folder, named as the torrent will be. Refused
+        if that name is already taken there, if a name can't be used
+        (hidden files, `..`), or if the files would take the disk below
+        the space kept free (Settings → Downloads). Then send each file in
+        chunks (PUT /uploads/{id}/files/{index}) and make the torrent
+        (POST /creations with `upload`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StartUpload" }
+      responses:
+        "201":
+          description: Started.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Upload" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /uploads/{id}:
+    delete:
+      tags: [create]
+      operationId: cancelUpload
+      summary: Cancel an upload; everything it had sent is deleted
+      parameters:
+        - $ref: "#/components/parameters/UploadId"
+      responses:
+        "204":
+          description: Cancelled.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/UploadNotFound" }
+
+  /uploads/{id}/files/{index}:
+    put:
+      tags: [create]
+      operationId: uploadChunk
+      summary: One chunk of one file (at most 8 MB)
+      description: |
+        The body is the chunk's bytes. It must start at `offset`, where
+        the file's data on the server ends; otherwise the answer is 409
+        with `received`, where the next chunk must start (a chunk whose
+        answer was lost is simply sent from there). A chunk that doesn't
+        arrive whole is dropped, all of it.
+      parameters:
+        - $ref: "#/components/parameters/UploadId"
+        - name: index
+          in: path
+          required: true
+          description: The file's place in the upload's list.
+          schema: { type: integer }
+        - name: offset
+          in: query
+          required: true
+          description: The byte of the file the chunk starts at.
+          schema: { type: integer, format: int64 }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        "200":
+          description: Taken.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChunkReceived" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/UploadNotFound" }
+        "409":
+          description: The chunk doesn't start where the file's data ends.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChunkReceived" }
+        "413":
+          description: The chunk is bigger than 8 MB.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /transfer:
+    get:
+      tags: [transfer]
+      operationId: getTransfer
+      summary: Totals for the top bar and status bar
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Transfer" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+components:
+  securitySchemes:
+    session:
+      type: apiKey
+      in: cookie
+      name: umbra_session
+    apiKeyHeader:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+    apiKeyQuery:
+      type: apiKey
+      in: query
+      name: apikey
+
+  parameters:
+    LogLevels:
+      name: levels
+      in: query
+      description: Comma-separated levels to show (info, warning, error); none shows all.
+      schema: { type: string }
+    LogTorrent:
+      name: torrent
+      in: query
+      description: Only lines about this torrent, by name or hash.
+      schema: { type: string }
+    LogSearch:
+      name: q
+      in: query
+      description: Only lines containing this text, any case.
+      schema: { type: string }
+    Hash:
+      name: hash
+      in: path
+      required: true
+      description: The torrent's info hash (40 hex characters).
+      schema: { type: string }
+    VpnId:
+      name: id
+      in: path
+      required: true
+      description: A saved VPN's id (VpnProfile.id).
+      schema: { type: string }
+    CreationId:
+      name: id
+      in: path
+      required: true
+      description: A torrent being made's id (Creation.id).
+      schema: { type: string }
+    UploadId:
+      name: id
+      in: path
+      required: true
+      description: An upload's id (Upload.id).
+      schema: { type: string }
+
+  responses:
+    VpnNotFound:
+      description: No saved VPN has that id (removed meanwhile?).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    CreationNotFound:
+      description: No torrent being made has that id (dismissed, or Umbra restarted).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    UploadNotFound:
+      description: No upload has that id (cancelled, finished, or deleted after a day with nothing new).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    DownloadsOff:
+      description: Downloading files is turned off in Settings → Security.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotDownloadable:
+      description: >-
+        Not complete, being moved or checked, or its files are missing
+        (the message says which).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    TorrentNotFound:
+      description: Umbra has no torrent with that hash (removed meanwhile?).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthorized:
+      description: Not signed in, or a wrong API key.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    ValidationError:
+      description: Some fields are invalid; `fields` says which and why.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    EngineDown:
+      description: The torrent engine isn't running; `message` says why.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: Stable machine-readable code, such as `invalid_credentials`.
+        message:
+          type: string
+          description: Plain-English explanation for the user.
+        fields:
+          type: object
+          additionalProperties: { type: string }
+          description: Per-field problems, keyed by field path.
+
+    AuthState:
+      type: object
+      required: [setupRequired, authenticated, localLoginEnabled, ssoEnabled]
+      properties:
+        setupRequired:
+          type: boolean
+          description: No account exists yet; show the create-account form.
+        authenticated: { type: boolean }
+        via:
+          type: string
+          enum: [session, apiKey, bypass, launch]
+          description: >-
+            How this request got in, when authenticated. `launch` is the app
+            that started Umbra as its helper (UMBRA_LAUNCH_TOKEN, sent in the
+            X-Umbra-Launch-Token header over loopback); setupRequired is then
+            false.
+        user: { $ref: "#/components/schemas/User" }
+        localLoginEnabled: { type: boolean }
+        ssoEnabled:
+          type: boolean
+          description: Single sign-on is on; show "Sign in with SSO".
+
+    User:
+      type: object
+      required: [id, username, hasPassword, ssoLinked]
+      properties:
+        id: { type: integer, format: int64 }
+        username: { type: string }
+        hasPassword: { type: boolean }
+        ssoLinked:
+          type: boolean
+          description: The account can sign in through single sign-on.
+
+    Credentials:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string }
+        password: { type: string, format: password }
+
+    PasswordChange:
+      type: object
+      required: [currentPassword, newPassword]
+      properties:
+        currentPassword: { type: string, format: password }
+        newPassword: { type: string, format: password }
+
+    Preferences:
+      type: object
+      description: |
+        UI preferences, saved per user on the server so they follow the
+        user between browsers. Every field is optional.
+      properties:
+        theme:
+          type: string
+          enum: [dark, light, system]
+          description: New installs start light.
+        look: { $ref: "#/components/schemas/Look" }
+        columns:
+          type: array
+          description: The torrent list's columns, in display order. Columns left out are hidden.
+          items: { $ref: "#/components/schemas/ColumnPref" }
+        sort:
+          type: object
+          required: [column, desc]
+          properties:
+            column: { $ref: "#/components/schemas/ColumnId" }
+            desc: { type: boolean }
+        detailPanelHeight:
+          type: integer
+          minimum: 120
+          maximum: 2000
+          description: Height of the bottom detail panel, in CSS pixels.
+        detailPanelOpen: { type: boolean }
+        sidebarCollapsed: { type: boolean }
+
+    Look:
+      type: object
+      description: |
+        How the interface looks (Settings → Appearance). Every field is
+        optional; what's left out is Umbra's default.
+      properties:
+        accent:
+          type: string
+          pattern: "^#[0-9a-fA-F]{6}$"
+          description: |
+            The accent colour. The client nudges it per theme until it's
+            visible and its text readable, so any colour is accepted.
+        corners: { $ref: "#/components/schemas/LookCorners" }
+        fontInterface: { $ref: "#/components/schemas/FontInterface" }
+        fontHeadings: { $ref: "#/components/schemas/FontHeadings" }
+        fontNumbers: { $ref: "#/components/schemas/FontNumbers" }
+
+    LookCorners:
+      type: string
+      enum: [sharp, soft, round]
+    FontInterface:
+      type: string
+      enum: [instrument-sans, inter, ibm-plex-sans, source-sans-3, device]
+    FontHeadings:
+      type: string
+      enum: [newsreader, source-serif-4, fraunces, interface, device]
+    FontNumbers:
+      type: string
+      enum: [spline-sans-mono, jetbrains-mono, ibm-plex-mono, interface, device]
+
+    ColumnPref:
+      type: object
+      required: [id]
+      properties:
+        id: { $ref: "#/components/schemas/ColumnId" }
+        width:
+          type: integer
+          minimum: 40
+          maximum: 1200
+
+    ColumnId:
+      type: string
+      enum:
+        - name
+        - size
+        - progress
+        - status
+        - downSpeed
+        - upSpeed
+        - eta
+        - ratio
+        - category
+        - tags
+        - addedAt
+        - seeds
+        - peers
+        - downloaded
+        - uploaded
+        - seedTime
+        - tracker
+        - savePath
+        - completedAt
+        - queuePosition
+
+    SecuritySettings:
+      type: object
+      required: [localLoginEnabled, bypassNetworks, trustedProxies, sessionDays, apiKey, appPassword, fileDownloads]
+      properties:
+        localLoginEnabled:
+          type: boolean
+          description: Password sign-in. Can only be turned off while single sign-on is on and linked to the account.
+        bypassNetworks:
+          type: array
+          items: { type: string }
+          description: Addresses and networks that need no sign-in, in CIDR form.
+        trustedProxies:
+          type: array
+          items: { type: string }
+          description: Reverse proxies whose X-Forwarded-For is believed, in CIDR form.
+        sessionDays:
+          type: integer
+          description: How long a sign-in lasts.
+        apiKey:
+          type: string
+          description: For apps that call the API.
+        appPassword:
+          type: string
+          description: >-
+            What apps that speak qBittorrent's API (Radarr, Sonarr, autobrr,
+            ...) sign in with, with any username. It opens only that API
+            (/api/v2), not this one or the web UI.
+        fileDownloads:
+          type: boolean
+          description: Torrents' finished files can be downloaded from the web page (on by default).
+
+    SsoSettings:
+      type: object
+      required: [enabled, issuer, clientId, clientSecretSet, requiredGroup, redirectUri, linked]
+      properties:
+        enabled: { type: boolean }
+        issuer:
+          type: string
+          description: The provider's issuer address, exactly (Authentik's ends in a slash).
+        clientId: { type: string }
+        clientSecretSet:
+          type: boolean
+          description: A client secret is stored (it is never sent back).
+        requiredGroup:
+          type: string
+          description: When set, only people in this provider group may sign in.
+        redirectUri:
+          type: string
+          readOnly: true
+          description: The address to register with the provider, as this browser reaches Umbra.
+        linked:
+          type: boolean
+          readOnly: true
+          description: The account is linked to a provider account (of this issuer).
+
+    SsoSettingsUpdate:
+      type: object
+      required: [enabled, issuer, clientId, requiredGroup]
+      properties:
+        enabled: { type: boolean }
+        issuer: { type: string }
+        clientId: { type: string }
+        clientSecret:
+          type: string
+          format: password
+          description: Leave out to keep the stored one; "" removes it.
+        requiredGroup: { type: string }
+
+    NotificationsSettings:
+      type: object
+      required: [enabled, host, port, security, username, passwordSet, from, to, onFinished, onError, onVpn, onLowDisk]
+      properties:
+        enabled:
+          type: boolean
+          description: Email is on.
+        host:
+          type: string
+          description: The mail server's name, like smtp.example.com.
+        port: { type: integer }
+        security:
+          type: string
+          enum: [starttls, tls, none]
+          description: STARTTLS (port 587), TLS from the start (465), or none (a relay that takes no password).
+        username: { type: string }
+        passwordSet:
+          type: boolean
+          readOnly: true
+          description: A password is stored (it is never sent back).
+        from:
+          type: string
+          description: The address the emails come from.
+        to:
+          type: string
+          description: Where they go; several addresses separated by commas.
+        onFinished:
+          type: boolean
+          description: Email when a download finishes.
+        onError:
+          type: boolean
+          description: Email when a torrent hits an error or its files go missing, or every torrent is stopped by a problem.
+        onVpn:
+          type: boolean
+          description: Email when the VPN has been down for 5 minutes, and when it's back.
+        onLowDisk:
+          type: boolean
+          description: Email when the disk drops below Settings → Downloads' warning level.
+
+    NotificationsSettingsUpdate:
+      type: object
+      required: [enabled, host, port, security, username, from, to, onFinished, onError, onVpn, onLowDisk]
+      properties:
+        enabled: { type: boolean }
+        host: { type: string }
+        port: { type: integer }
+        security:
+          type: string
+          enum: [starttls, tls, none]
+        username: { type: string }
+        password:
+          type: string
+          format: password
+          description: Leave out to keep the stored one; "" removes it.
+        from: { type: string }
+        to: { type: string }
+        onFinished: { type: boolean }
+        onError: { type: boolean }
+        onVpn: { type: boolean }
+        onLowDisk: { type: boolean }
+
+    SecuritySettingsUpdate:
+      type: object
+      required: [localLoginEnabled, bypassNetworks, trustedProxies, sessionDays]
+      properties:
+        localLoginEnabled: { type: boolean }
+        bypassNetworks:
+          type: array
+          items: { type: string }
+          description: IP addresses or networks such as 192.168.1.0/24.
+        trustedProxies:
+          type: array
+          items: { type: string }
+        sessionDays:
+          type: integer
+          minimum: 1
+          maximum: 365
+        fileDownloads:
+          type: boolean
+          description: Left out, it stays as it is.
+
+    DownloadsSettings:
+      type: object
+      required: [folder, incompleteFolder, categories]
+      properties:
+        folder:
+          type: string
+          description: Full path; empty means "downloads" in the data folder.
+        defaultFolder:
+          type: string
+          readOnly: true
+          description: The folder in use when `folder` is empty.
+        incompleteFolder:
+          type: string
+          description: Full path; empty is off.
+        categories:
+          type: array
+          items: { $ref: "#/components/schemas/Category" }
+        lowSpaceWarningGB:
+          type: integer
+          minimum: 0
+          description: Below this many GB free on the download disk, a banner warns, and downloads that would go below it wait (`waitingForSpace`); 0 is off. Left out, it keeps its value.
+        watchFolder:
+          type: string
+          description: >
+            Full path; empty is off. .torrent and .magnet files put there are
+            added and started (in a subfolder named after a category, with
+            that category), then renamed ….added, or ….failed with the reason
+            in the log. Not a folder torrents download into. Left out, it
+            keeps its value.
+
+    Category:
+      type: object
+      required: [name, folder]
+      properties:
+        name: { type: string }
+        folder:
+          type: string
+          description: Full path; empty means the default folder.
+        ratio:
+          type: number
+          description: >
+            Its own seed ratio goal. Left out follows Settings → Seeding; a
+            negative number is none for this category. A torrent's own goals
+            come first.
+        seedingMinutes:
+          type: integer
+          description: Its own seeding time goal, in minutes; as for ratio.
+        inactiveMinutes:
+          type: integer
+          description: >
+            Its own goal for time seeding with nothing uploaded, in minutes;
+            as for ratio.
+        downloadLimitKBs:
+          type: integer
+          description: Each of its torrents' download speed limit, KB/s; 0 or left out is none.
+        uploadLimitKBs:
+          type: integer
+          description: Each of its torrents' upload speed limit, KB/s; 0 or left out is none.
+
+    OwnLimits:
+      type: object
+      description: |
+        A torrent's own limits. A seed goal of null follows its category
+        (else Settings → Seeding); a negative one is no goal for this
+        torrent. Speeds in KB/s; 0 is none of its own (its category's
+        applies).
+      required: [ratio, seedingMinutes, inactiveMinutes, downloadLimitKBs, uploadLimitKBs]
+      properties:
+        ratio: { type: number, format: double, nullable: true }
+        seedingMinutes: { type: integer, nullable: true }
+        inactiveMinutes: { type: integer, nullable: true }
+        downloadLimitKBs: { type: integer }
+        uploadLimitKBs: { type: integer }
+
+    LimitSource:
+      type: string
+      enum: [torrent, category, global, none]
+      description: Where a limit in force comes from; `none` when there's no such limit.
+
+    LimitsInForce:
+      type: object
+      description: |
+        The limits a torrent works to, resolved: a seed goal is null for
+        none, a speed (KB/s) 0 for none. `from` says where each comes from.
+      required: [ratio, seedingMinutes, inactiveMinutes, downloadLimitKBs, uploadLimitKBs, from]
+      properties:
+        ratio: { type: number, format: double, nullable: true }
+        seedingMinutes: { type: integer, nullable: true }
+        inactiveMinutes: { type: integer, nullable: true }
+        downloadLimitKBs: { type: integer }
+        uploadLimitKBs: { type: integer }
+        from:
+          type: object
+          required: [ratio, seedingMinutes, inactiveMinutes, downloadLimitKBs, uploadLimitKBs]
+          properties:
+            ratio: { $ref: "#/components/schemas/LimitSource" }
+            seedingMinutes: { $ref: "#/components/schemas/LimitSource" }
+            inactiveMinutes: { $ref: "#/components/schemas/LimitSource" }
+            downloadLimitKBs: { $ref: "#/components/schemas/LimitSource" }
+            uploadLimitKBs: { $ref: "#/components/schemas/LimitSource" }
+
+    TorrentLimits:
+      type: object
+      required: [own, inForce, category]
+      properties:
+        own: { $ref: "#/components/schemas/OwnLimits" }
+        inForce: { $ref: "#/components/schemas/LimitsInForce" }
+        category:
+          type: string
+          description: Its category, whose limits it follows; "" for none.
+
+    TorrentsLimits:
+      type: object
+      description: The fields to change, as in OwnLimits; the ones left out stay.
+      required: [hashes]
+      properties:
+        hashes:
+          type: array
+          minItems: 1
+          items: { type: string }
+        ratio: { type: number, format: double, nullable: true }
+        seedingMinutes: { type: integer, nullable: true }
+        inactiveMinutes: { type: integer, nullable: true }
+        downloadLimitKBs: { type: integer }
+        uploadLimitKBs: { type: integer }
+
+    SeedingSettings:
+      type: object
+      description: >
+        The seed goals for every finished torrent; a category's or a
+        torrent's own come first. A torrent that reaches one is stopped,
+        never removed: it stays listed until the person, or the app that
+        added it, removes it.
+      required: [ratio, seedingMinutes, inactiveMinutes]
+      properties:
+        ratio:
+          type: number
+          nullable: true
+          description: Uploaded over downloaded; null is no goal.
+        seedingMinutes:
+          type: integer
+          nullable: true
+          description: Time seeding, in minutes; null is no goal.
+        inactiveMinutes:
+          type: integer
+          nullable: true
+          description: Time seeding with nothing uploaded, in minutes; null is no goal.
+
+    SpeedSettings:
+      type: object
+      description: Speeds in KB/s; 0 is no limit.
+      required: [downloadLimitKBs, uploadLimitKBs, slowMode, slowDownloadKBs, slowUploadKBs, slowModeSchedule]
+      properties:
+        downloadLimitKBs: { type: integer }
+        uploadLimitKBs: { type: integer }
+        slowMode: { type: boolean }
+        slowDownloadKBs: { type: integer }
+        slowUploadKBs: { type: integer }
+        slowModeSchedule:
+          type: object
+          required: [enabled, days, from, to]
+          properties:
+            enabled: { type: boolean }
+            days:
+              type: array
+              description: 0 (Sunday) to 6 (Saturday).
+              items: { type: integer }
+            from: { type: string, description: "HH:MM, local time." }
+            to: { type: string, description: "HH:MM; earlier than from runs past midnight." }
+
+    QueueSettings:
+      type: object
+      required: [maxActiveDownloads, maxActiveSeeds]
+      properties:
+        maxActiveDownloads: { type: integer }
+        maxActiveSeeds:
+          type: integer
+          description: 0 is no limit.
+
+    ConnectionSettings:
+      type: object
+      required: [listenPort, dht, pex]
+      properties:
+        listenPort: { type: integer }
+        dht: { type: boolean }
+        pex: { type: boolean }
+
+    VpnStatus:
+      type: object
+      required: [state, configured, saved, failover]
+      properties:
+        state: { $ref: "#/components/schemas/VpnState" }
+        heldReason: { $ref: "#/components/schemas/VpnHeldReason" }
+        message:
+          type: string
+          description: Why it is down or held, in plain words.
+        configured: { type: boolean, description: "A VPN is saved." }
+        problem:
+          type: string
+          description: Why the VPN in use can't be used.
+        publicKey:
+          type: string
+          description: The public key of the VPN in use (never the private one).
+        endpoint: { type: string }
+        tunnelAddresses:
+          type: array
+          items: { type: string }
+        vpnIp: { type: string, description: "The address peers see." }
+        realIp: { type: string, description: "The computer's own address (not shown to peers)." }
+        ipError: { type: string }
+        lastHandshake: { type: string, format: date-time }
+        since: { type: string, format: date-time }
+        checkedAt: { type: string, format: date-time }
+        forwardedPort:
+          type: integer
+          description: The port the VPN provider forwards to the VPN in use; absent when none.
+        saved:
+          type: array
+          description: The saved VPNs, in the order switching tries them.
+          items: { $ref: "#/components/schemas/VpnProfile" }
+        failover: { $ref: "#/components/schemas/VpnFailover" }
+        lastSwitch: { $ref: "#/components/schemas/VpnSwitch" }
+
+    VpnProfile:
+      type: object
+      description: A saved VPN. Its config (and private key) is never sent.
+      required: [id, name, inUse]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        inUse: { type: boolean }
+        endpoint: { type: string }
+        publicKey: { type: string }
+        tunnelAddresses:
+          type: array
+          items: { type: string }
+        forwardedPort:
+          type: integer
+          description: The port the VPN provider forwards to it; absent when none.
+        problem:
+          type: string
+          description: Why its config can't be used (unreadable after the secret key changed).
+
+    VpnFailover:
+      type: object
+      description: Switching to the next saved VPN when the one in use is down (off by default).
+      required: [enabled, minutes]
+      properties:
+        enabled: { type: boolean }
+        minutes:
+          type: integer
+          minimum: 1
+          maximum: 120
+          description: How long the VPN in use is down before switching.
+
+    VpnSwitch:
+      type: object
+      description: The last time switching (not the person) put another VPN in use. Names as they were then.
+      required: [fromId, fromName, toId, toName, at, minutes]
+      properties:
+        fromId: { type: string }
+        fromName: { type: string }
+        toId: { type: string }
+        toName: { type: string }
+        at: { type: string, format: date-time }
+        minutes: { type: integer, description: "How long the one left had been down." }
+
+    SystemStatus:
+      type: object
+      required: [version, startedAt]
+      properties:
+        version: { type: string }
+        startedAt: { type: string, format: date-time }
+
+    TorrentState:
+      type: string
+      description: |
+        What the list's Status column shows. `waitingForVpn` is a torrent
+        that would run but is held by the VPN kill switch;
+        `waitingForSpace` a download that would take its disk below the
+        space kept free (Settings → Downloads), with `spaceWait` saying
+        how much it needs. `missingFiles` a finished torrent whose files
+        aren't in its folder any more (moved or deleted outside Umbra);
+        `error` says where, and a recheck downloads them again.
+      enum:
+        - downloading
+        - seeding
+        - paused
+        - queued
+        - checking
+        - moving
+        - fetchingDetails
+        - error
+        - waitingForVpn
+        - waitingForSpace
+        - missingFiles
+
+    Torrent:
+      type: object
+      description: One row of the torrent list. Speeds in bytes per second, sizes in bytes.
+      required:
+        - hash
+        - name
+        - size
+        - progress
+        - state
+        - downSpeed
+        - upSpeed
+        - ratio
+        - category
+        - tags
+        - addedAt
+        - savePath
+        - seeds
+        - seedsTotal
+        - peers
+        - peersTotal
+        - downloaded
+        - uploaded
+        - seedTimeSeconds
+        - queuePosition
+      properties:
+        hash:
+          type: string
+          description: Info hash (v1, 40 hex characters), the torrent's id.
+        name: { type: string }
+        size:
+          type: integer
+          format: int64
+          description: Bytes of the files chosen for download; 0 until a magnet's details arrive.
+        progress:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+        state: { $ref: "#/components/schemas/TorrentState" }
+        error:
+          type: string
+          description: >
+            Plain-English reason: why it's in `error` (or its files are
+            missing, or its trackers have dropped it), or, when `paused`,
+            the seed goal it stopped at ("Stopped at its seed ratio of 2").
+        downSpeed: { type: integer, format: int64 }
+        upSpeed: { type: integer, format: int64 }
+        etaSeconds:
+          type: integer
+          format: int64
+          description: Left out when unknown or not downloading.
+        ratio: { type: number, format: double }
+        category:
+          type: string
+          description: Empty when none.
+        tags:
+          type: array
+          items: { type: string }
+        addedAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time }
+        savePath: { type: string }
+        seeds:
+          type: integer
+          description: Seeds connected.
+        seedsTotal:
+          type: integer
+          description: Seeds in the swarm, as trackers report.
+        peers: { type: integer }
+        peersTotal: { type: integer }
+        downloaded: { type: integer, format: int64 }
+        uploaded: { type: integer, format: int64 }
+        seedTimeSeconds: { type: integer, format: int64 }
+        tracker:
+          type: string
+          description: Host of the tracker currently used; empty for trackerless torrents.
+        queuePosition:
+          type: integer
+          description: 1 is next to run; 0 when not queued.
+        spaceWait: { $ref: "#/components/schemas/SpaceWait" }
+        madeFromOwnFiles:
+          type: boolean
+          description: >
+            True when Umbra made this torrent itself (Create a torrent,
+            with seeding on) and seeds it from the files it was made from.
+            Those files are the person's own originals, not a download, so
+            deleting them with the torrent deletes their originals. Left
+            out (false) for every torrent added the ordinary way. It stays
+            true after "Move Data To…", a restart, and a backup and
+            restore.
+
+    SpaceWait:
+      type: object
+      description: >
+        Why a download is `waitingForSpace`: it still has `need` bytes to
+        write, its disk has `free`, `keep` is kept free, and `others` is
+        what the other downloads on that disk still have to write. It
+        starts by itself once there's room.
+      required: [need, free, keep, others]
+      properties:
+        need: { type: integer, format: int64 }
+        free: { type: integer, format: int64 }
+        keep: { type: integer, format: int64 }
+        others: { type: integer, format: int64 }
+
+    TorrentsSnapshot:
+      type: object
+      required: [torrents, rev]
+      properties:
+        rev:
+          type: integer
+          format: int64
+          description: Version of this list; deltas name the version they follow.
+        torrents:
+          type: array
+          items: { $ref: "#/components/schemas/Torrent" }
+
+    TorrentsDelta:
+      type: object
+      required: [from, rev, changed, removed]
+      properties:
+        from:
+          type: integer
+          format: int64
+          description: The rev this delta applies to. If it isn't the browser's, wait for a snapshot.
+        rev: { type: integer, format: int64 }
+        changed:
+          type: array
+          description: Added torrents and changed torrents, sent whole.
+          items: { $ref: "#/components/schemas/Torrent" }
+        removed:
+          type: array
+          description: Hashes of removed torrents.
+          items: { type: string }
+
+    FilePriority:
+      type: string
+      enum: [skip, normal, high]
+
+    InspectTorrent:
+      type: object
+      properties:
+        torrentFile:
+          type: string
+          format: byte
+          description: The .torrent file's bytes, base64.
+        magnet: { type: string }
+        url:
+          type: string
+          description: An http:// or https:// address of a .torrent file.
+        fetchDetails:
+          type: boolean
+          description: For a magnet link (or an address that gives one), start fetching its details.
+
+    TorrentPreview:
+      type: object
+      required: [hash, name, detailsKnown, private, trackers]
+      properties:
+        hash: { type: string }
+        name:
+          type: string
+          description: For a magnet link, its display name if it has one, else the hash.
+        detailsKnown:
+          type: boolean
+          description: The files and size are known (false for a magnet link).
+        size:
+          type: integer
+          format: int64
+        files:
+          type: array
+          description: In the torrent's file order (the order filePriorities follow).
+          items: { $ref: "#/components/schemas/PreviewFile" }
+        private:
+          type: boolean
+          description: A private torrent (its trackers only; no DHT or peer exchange).
+        trackers:
+          type: array
+          items: { type: string }
+        torrentFile:
+          type: string
+          format: byte
+          description: The .torrent file a web address gave, to add with.
+        magnet:
+          type: string
+          description: The magnet link a web address redirected to, to add with.
+        existing: { $ref: "#/components/schemas/ExistingTorrent" }
+        waiting:
+          type: boolean
+          description: Umbra is fetching this magnet link's details, or has them and waits for it to be added.
+        peers:
+          type: integer
+          description: While waiting, how many peers it is connected to.
+
+    PreviewFile:
+      type: object
+      required: [path, size]
+      properties:
+        path:
+          type: string
+          description: '"/"-separated; a torrent of several files starts with its own folder.'
+        size:
+          type: integer
+          format: int64
+
+    ExistingTorrent:
+      type: object
+      required: [hash, name, state, newTrackers]
+      properties:
+        hash: { type: string }
+        name: { type: string }
+        state: { $ref: "#/components/schemas/TorrentState" }
+        newTrackers:
+          type: array
+          description: Trackers of the inspected torrent the existing one doesn't have.
+          items: { type: string }
+
+    TorrentFinished:
+      type: object
+      required: [hash, name, size]
+      properties:
+        hash: { type: string }
+        name: { type: string }
+        size:
+          type: integer
+          format: int64
+          description: Bytes downloaded (the files not skipped).
+
+    LogPage:
+      type: object
+      required: [entries, more, counts, torrents]
+      properties:
+        entries:
+          type: array
+          items: { $ref: "#/components/schemas/LogEntry" }
+        more: { type: boolean }
+        counts:
+          type: object
+          required: [info, warning, error]
+          properties:
+            info: { type: integer }
+            warning: { type: integer }
+            error: { type: integer }
+        torrents:
+          type: array
+          description: The torrents the kept lines are about, by name (for the torrent picker).
+          items: { type: string }
+
+    LogEntry:
+      type: object
+      required: [seq, time, level, source, message, attrs]
+      properties:
+        seq:
+          type: integer
+          format: int64
+          description: Numbers the lines in the order they were written.
+        time: { type: string, format: date-time }
+        level:
+          type: string
+          enum: [info, warning, error]
+        source:
+          type: string
+          description: The torrent the line is about, or "Umbra".
+        torrent:
+          type: string
+          description: The torrent's name, when the line is about one.
+        message: { type: string }
+        attrs:
+          type: array
+          description: The line's other details, in order.
+          items:
+            type: object
+            required: [key, value]
+            properties:
+              key: { type: string }
+              value: { type: string }
+
+    TorrentsCategory:
+      type: object
+      required: [hashes, category]
+      properties:
+        hashes:
+          type: array
+          minItems: 1
+          items: { type: string }
+        category:
+          type: string
+          description: A category from Settings → Downloads, or "" for none.
+
+    TorrentsTags:
+      type: object
+      required: [hashes]
+      properties:
+        hashes:
+          type: array
+          minItems: 1
+          items: { type: string }
+        add:
+          type: array
+          items: { type: string }
+        remove:
+          type: array
+          items: { type: string }
+
+    MoveTorrents:
+      type: object
+      required: [hashes, folder]
+      properties:
+        hashes:
+          type: array
+          minItems: 1
+          items: { type: string }
+        folder:
+          type: string
+          description: A full path on the server.
+
+    FilePriorities:
+      type: object
+      required: [files]
+      properties:
+        files:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [index, priority]
+            properties:
+              index:
+                type: integer
+                description: The file's index, as GET /torrents/{hash}/files gives it.
+              priority: { $ref: "#/components/schemas/FilePriority" }
+
+    MagnetLink:
+      type: object
+      required: [magnet]
+      properties:
+        magnet: { type: string }
+
+    TrackerTiers:
+      type: object
+      required: [tiers]
+      properties:
+        tiers:
+          type: array
+          description: Tiers of tracker addresses (http://, https:// or udp://).
+          items:
+            type: array
+            items: { type: string }
+
+    TrackerUrls:
+      type: object
+      required: [urls]
+      properties:
+        urls:
+          type: array
+          minItems: 1
+          items: { type: string }
+
+    TrackerList:
+      type: object
+      required: [trackers, dht, pex]
+      properties:
+        trackers:
+          type: array
+          description: In tier order.
+          items: { $ref: "#/components/schemas/Tracker" }
+        dht:
+          type: boolean
+          description: The torrent also finds peers through the DHT.
+        pex:
+          type: boolean
+          description: The torrent also finds peers through peer exchange.
+
+    Tracker:
+      type: object
+      required: [url, tier, state]
+      properties:
+        url: { type: string }
+        tier:
+          type: integer
+          description: Trackers in a lower tier are asked first; 0 is the first.
+        state:
+          type: string
+          enum: [working, notContacted, error]
+        message:
+          type: string
+          description: The tracker's own words when it failed, such as "Unregistered torrent".
+        seeds:
+          type: integer
+          description: The swarm's seeds as this tracker last counted them (when working).
+        peers:
+          type: integer
+          description: The swarm's other peers as this tracker last counted them (when working).
+        lastAnnounce: { type: string, format: date-time }
+        nextAnnounce:
+          type: string
+          format: date-time
+          description: When it asked to be asked again, when known.
+
+    PeerList:
+      type: object
+      required: [peers]
+      properties:
+        peers:
+          type: array
+          items: { $ref: "#/components/schemas/Peer" }
+
+    Peer:
+      type: object
+      required: [address, encrypted, incoming, progress, downSpeed, upSpeed]
+      properties:
+        address:
+          type: string
+          description: IP address and port.
+        client:
+          type: string
+          description: The program the peer says it runs, when it says.
+        encrypted:
+          type: boolean
+          description: The connection uses BitTorrent's encryption.
+        incoming:
+          type: boolean
+          description: The peer connected to Umbra (rather than Umbra to it).
+        progress:
+          type: number
+          format: double
+          description: How much of the torrent the peer has, 0 to 1.
+        downSpeed:
+          type: integer
+          format: int64
+          description: Bytes per second from the peer.
+        upSpeed:
+          type: integer
+          format: int64
+          description: Bytes per second to the peer.
+
+    FileList:
+      type: object
+      required: [files]
+      properties:
+        files:
+          type: array
+          items: { $ref: "#/components/schemas/TorrentFile" }
+
+    DownloadCheck:
+      type: object
+      description: What a download would send.
+      required: [name, size, zip]
+      properties:
+        name:
+          type: string
+          description: The file's name as it will be saved ("Album.zip", "film.mkv").
+        size:
+          type: integer
+          format: int64
+        zip:
+          type: boolean
+          description: A zip, which can't resume after a dropped connection.
+
+    TorrentFile:
+      type: object
+      required: [index, path, size, done, priority]
+      properties:
+        index:
+          type: integer
+          description: Its place in the torrent's file order (what priorities are set by).
+        path:
+          type: string
+          description: Relative to the save folder, "/"-separated; a torrent of several files starts with its own folder.
+        size:
+          type: integer
+          format: int64
+        done:
+          type: integer
+          format: int64
+          description: Bytes downloaded and checked.
+        priority: { $ref: "#/components/schemas/FilePriority" }
+
+    AddTorrent:
+      type: object
+      properties:
+        magnet: { type: string }
+        torrentFile:
+          type: string
+          format: byte
+          description: The .torrent file's bytes, base64.
+        category: { type: string }
+        tags:
+          type: array
+          items: { type: string }
+        savePath:
+          type: string
+          description: A full path; empty means the category's folder or the default one.
+        paused: { type: boolean }
+        filePriorities:
+          type: array
+          description: One per file, in the torrent's file order (.torrent files, and magnet links waiting with their details in).
+          items: { $ref: "#/components/schemas/FilePriority" }
+
+    AddResult:
+      type: object
+      required: [hash, alreadyAdded]
+      properties:
+        hash: { type: string }
+        alreadyAdded: { type: boolean }
+
+    TorrentAction:
+      type: object
+      required: [action, hashes]
+      properties:
+        action:
+          type: string
+          enum: [pause, resume, forceStart, recheck, reannounce, queueTop, queueUp, queueDown, queueBottom]
+          description: |
+            The queue moves keep the moved torrents' order among themselves.
+            `queueUp` and `queueDown` move each one place, past the next
+            torrent of its kind (unfinished torrents queue for downloading,
+            finished ones for seeding). `reannounce` asks the trackers of
+            the running ones for peers now.
+        hashes:
+          type: array
+          minItems: 1
+          items: { type: string }
+
+    RemoveTorrents:
+      type: object
+      required: [hashes, deleteFiles]
+      properties:
+        hashes:
+          type: array
+          minItems: 1
+          items: { type: string }
+        deleteFiles:
+          type: boolean
+          description: >
+            Also delete the torrent's files. They can't be got back. For a
+            torrent with `madeFromOwnFiles`, these are the person's original
+            files (the ones it was made from), not a download.
+
+    VpnState:
+      type: string
+      enum: [connected, connecting, down, held, none]
+
+    VpnHeldReason:
+      type: string
+      description: >
+        Why the VPN state is `held` (sent only then; clients that don't
+        know a value should treat it as held for an unknown reason).
+        `vpnRemoved`: the last saved VPN was removed. `noVpnYet`: no VPN has
+        been set up yet and nobody has chosen to start without one
+        (UMBRA_HOLD_UNTIL_VPN; nothing has touched the network).
+        `vpnUnusable`: a VPN is saved but its config can't be read or used.
+        "Start without VPN" releases the first two; the third needs the
+        VPN fixed.
+      enum: [vpnRemoved, noVpnYet, vpnUnusable]
+
+    EngineProblem:
+      type: object
+      description: >
+        Why the torrent engine can't run (absent while it runs). Every torrent
+        is stopped until it's fixed; the VPN state stays about the VPN.
+      required: [message, portBusy]
+      properties:
+        message: { type: string }
+        portBusy:
+          type: boolean
+          description: Another program has the peer port; Settings → Connection changes it.
+
+    Transfer:
+      type: object
+      required:
+        - lowSpace
+        - downSpeed
+        - upSpeed
+        - downLimit
+        - upLimit
+        - slowMode
+        - sessionDownloaded
+        - sessionUploaded
+        - freeSpace
+        - incoming
+        - dhtNodes
+        - vpn
+      properties:
+        downSpeed: { type: integer, format: int64 }
+        upSpeed: { type: integer, format: int64 }
+        downLimit:
+          type: integer
+          format: int64
+          description: Bytes per second in force now (slow mode included); 0 is no limit.
+        upLimit: { type: integer, format: int64 }
+        slowMode: { type: boolean }
+        sessionDownloaded: { type: integer, format: int64 }
+        sessionUploaded: { type: integer, format: int64 }
+        freeSpace:
+          type: integer
+          format: int64
+          description: Free bytes on the default download folder's disk.
+        lowSpace:
+          type: integer
+          format: int64
+          description: The disk banner shows when freeSpace is below this (Settings → Downloads); 0 is never.
+        incoming:
+          type: boolean
+          description: Peers have connected in recently (shown as "Incoming connections").
+        dhtNodes: { type: integer }
+        vpn: { $ref: "#/components/schemas/VpnState" }
+        vpnHeldReason: { $ref: "#/components/schemas/VpnHeldReason" }
+        vpnIp:
+          type: string
+          description: The public IP peers see, when the VPN is connected.
+        engineProblem: { $ref: "#/components/schemas/EngineProblem" }
+
+    FolderListing:
+      type: object
+      required: [entries]
+      properties:
+        path:
+          type: string
+          description: The folder listed; empty for the list of folders.
+        parent:
+          type: string
+          description: The folder above, while it's still one that can be listed; empty at the top.
+        entries:
+          type: array
+          items: { $ref: "#/components/schemas/FolderEntry" }
+
+    FolderEntry:
+      type: object
+      required: [name, path, folder]
+      properties:
+        name:
+          type: string
+          description: Its name; at the top, the folder's label ("Downloads", or a category's name).
+        path: { type: string }
+        folder: { type: boolean }
+        size:
+          type: integer
+          format: int64
+          description: A file's size in bytes.
+
+    CreationPreview:
+      type: object
+      required: [files, size, pieceLength, pieces]
+      properties:
+        name: { type: string, description: "The torrent's name (empty for an upload's size)." }
+        files: { type: integer }
+        size: { type: integer, format: int64 }
+        pieceLength: { type: integer, format: int64 }
+        pieces: { type: integer }
+
+    CreateTorrent:
+      type: object
+      properties:
+        path:
+          type: string
+          description: >
+            A file or folder on the server, as a full path, inside the
+            download folder or a category's folder. With UMBRA_SHARE_ANYWHERE
+            on (the Mac app), the app that started Umbra (its launch token,
+            no one else) may name one anywhere on the computer except Umbra's
+            own data folder; with `seed` it seeds from there, nothing copied
+            or moved.
+        upload: { type: string, description: "Instead of path: a finished upload's id." }
+        trackers:
+          type: array
+          description: Tiers of tracker addresses (a blank line between tiers in the dialog).
+          items:
+            type: array
+            items: { type: string }
+        private: { type: boolean, description: "Keeps it off the DHT and peer exchange." }
+        comment: { type: string, maxLength: 2000 }
+        source: { type: string, maxLength: 200, description: "Some private trackers ask for this." }
+        pieceLength:
+          type: integer
+          format: int64
+          description: Bytes, a power of two from 16 KB to 64 MB; 0 or none is Automatic.
+        seed: { type: boolean, description: "Add it to the list, seeding, when it's made." }
+        category: { type: string }
+        tags:
+          type: array
+          items: { type: string }
+
+    Creation:
+      type: object
+      required: [id, name, path, state, files, size, read, pieceLength, pieces, private, seeding, started]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        path: { type: string, description: "The file or folder shared." }
+        state:
+          type: string
+          enum: [queued, reading, done, failed]
+          description: queued waits for the one before it; reading works out the pieces.
+        files: { type: integer }
+        size: { type: integer, format: int64 }
+        read: { type: integer, format: int64, description: "Bytes read so far." }
+        pieceLength: { type: integer, format: int64 }
+        pieces: { type: integer }
+        private: { type: boolean }
+        error:
+          type: string
+          description: Why it failed, or (done) why it couldn't start seeding.
+        hash: { type: string, description: "The info hash, once made." }
+        seeding: { type: boolean, description: "It was added to the list." }
+        started: { type: string, format: date-time }
+
+    StartUpload:
+      type: object
+      required: [files]
+      properties:
+        category: { type: string, description: "Where the files will live: its folder; none is the default download folder." }
+        files:
+          type: array
+          items: { $ref: "#/components/schemas/UploadFile" }
+
+    UploadFile:
+      type: object
+      required: [path, size]
+      properties:
+        path:
+          type: string
+          description: Starting with the torrent's name ("Holiday/day1.jpg"), or one file alone ("notes.txt").
+        size: { type: integer, format: int64, minimum: 0 }
+
+    Upload:
+      type: object
+      required: [id, name, folder, path, files, size, received, complete, started, updated]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        category: { type: string }
+        folder: { type: string, description: "Where it will live." }
+        path: { type: string, description: "folder/name." }
+        files:
+          type: array
+          items: { $ref: "#/components/schemas/UploadFileStatus" }
+        size: { type: integer, format: int64 }
+        received: { type: integer, format: int64 }
+        complete: { type: boolean, description: "Every file is whole: it can be made into a torrent." }
+        started: { type: string, format: date-time }
+        updated: { type: string, format: date-time, description: "The last chunk; a day with nothing new deletes it." }
+
+    UploadFileStatus:
+      type: object
+      required: [path, size, received]
+      properties:
+        path: { type: string }
+        size: { type: integer, format: int64 }
+        received: { type: integer, format: int64 }
+
+    ChunkReceived:
+      type: object
+      required: [received]
+      properties:
+        received:
+          type: integer
+          format: int64
+          description: How much of the file has arrived; the next chunk starts here.

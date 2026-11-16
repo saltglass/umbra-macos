@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Refuses a push unless the style check and the tests pass on this Mac.
+# This stands in for checks on a server: there is no Mac among the runners.
+# Turn on once per clone with: git config core.hooksPath .githooks
+set -e
+just lint
+just test

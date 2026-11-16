@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Refuses a commit whose Swift code fails the style check.
+# Turn on once per clone with: git config core.hooksPath .githooks
+exec just lint

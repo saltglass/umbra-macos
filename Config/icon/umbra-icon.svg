@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Umbra icon"><defs>
+  <linearGradient id="shield" x1="0" y1="0" x2="1" y2="0" gradientUnits="objectBoundingBox"><stop offset="0" stop-color="var(--umbra-violet, #9851fb)"/><stop offset="0.48" stop-color="var(--umbra-indigo, #657cff)"/><stop offset="1" stop-color="var(--umbra-cyan, #08ddeb)"/></linearGradient>
+  <linearGradient id="ribbon" x1="0" y1="0" x2="1" y2="0" gradientUnits="objectBoundingBox"><stop offset="0" stop-color="var(--umbra-violet, #9652ff)"/><stop offset="0.50" stop-color="var(--umbra-blue, #427ff8)"/><stop offset="1" stop-color="var(--umbra-cyan, #00e1ef)"/></linearGradient>
+  <linearGradient id="shadow" x1="0" y1="0" x2=".85" y2="1" gradientUnits="objectBoundingBox"><stop offset="0" stop-color="var(--umbra-shadow, #070615)"/><stop offset="1" stop-color="var(--umbra-shadow-edge, #141031)"/></linearGradient>
+  <linearGradient id="tip" x1="0" y1="0" x2="1" y2="1" gradientUnits="objectBoundingBox"><stop offset="0" stop-color="var(--umbra-shadow-edge, #211b50)"/><stop offset="1" stop-color="var(--umbra-shadow, #070615)"/></linearGradient>
+  <clipPath id="shieldClip"><path d="M128 15 L221 53 Q226 55 226 62 L226 125 Q225 200 128 245 Q30 201 30 125 L30 62 Q30 55 35 53Z"/></clipPath>
+ </defs><g>
+ <!-- Solid protective shield silhouette -->
+ <path d="M128 15 L221 53 Q226 55 226 62 L226 125 Q225 200 128 245 Q30 201 30 125 L30 62 Q30 55 35 53Z" fill="url(#shield)"/>
+ <g clip-path="url(#shieldClip)">
+ <!-- Eclipse is a dark disk inset into shield, not just an outline -->
+ <circle cx="125" cy="125" r="88" fill="url(#shadow)"/>
+ <!-- Shadowed lower shield sector -->
+ <path d="M92 219 Q145 221 198 157 Q180 214 128 245 Q107 234 92 219Z" fill="url(#tip)"/>
+ </g>
+ <!-- Two tapered network-flow ribbons, running across eclipse -->
+ <path d="M23 162 Q47 181 91 165 Q133 150 183 135 Q203 130 213 129 Q169 146 128 174 Q61 217 25 173 Q22 168 23 162Z" fill="url(#ribbon)"/>
+ <path d="M42 187 Q70 199 111 180 Q155 163 203 140 Q163 176 129 195 Q76 223 49 198Z" fill="url(#ribbon)"/>
+ </g></svg>

@@ -1,0 +1,10 @@
+CLAUDE.local.md
+build/
+*.xcodeproj
+.build/
+DerivedData/
+.DS_Store
+.swiftpm/
+UmbraKit/.build/
+*.xcworkspace/xcuserdata/
+Config/Info.plist

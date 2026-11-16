@@ -1,0 +1,123 @@
+name: Umbra
+options:
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    ARCHS: arm64
+    ONLY_ACTIVE_ARCH: YES
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "-"
+    ENABLE_HARDENED_RUNTIME: YES
+    # Xcode quietly drops hardened mode when signing ad hoc ("-"), so ask
+    # codesign for it directly. With a real identity it is simply asked twice.
+    OTHER_CODE_SIGN_FLAGS: "--options runtime"
+    # Debug builds normally put the app's code in a separate library (for
+    # Xcode's previews, which this project doesn't use). Hardened mode
+    # refuses to load that library from an ad hoc signed app, so the
+    # development build would not open. One program, as in Release.
+    ENABLE_DEBUG_DYLIB: NO
+    ENABLE_APP_SANDBOX: NO
+# The app's version number lives in Config/Version.xcconfig, in one place.
+configFiles:
+  Debug: Config/Version.xcconfig
+  Release: Config/Version.xcconfig
+packages:
+  UmbraKit:
+    path: UmbraKit
+targets:
+  Umbra:
+    type: application
+    platform: macOS
+    sources:
+      - path: App
+        # Notes for builders (App/Settings/README.md), not part of the app.
+        excludes: ["**/*.md"]
+    dependencies:
+      - package: UmbraKit
+        product: UmbraKit
+    # What the app says about itself that Xcode's own settings can't: the
+    # files and links it opens. Xcode adds the generated keys (name, version,
+    # category...) to this file when it builds (GENERATE_INFOPLIST_FILE below).
+    info:
+      path: Config/Info.plist
+      properties:
+        # Kept from the build settings below, as before.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # macOS has no type of its own for .torrent files, so the app names it.
+        UTImportedTypeDeclarations:
+          - UTTypeIdentifier: org.bittorrent.torrent
+            UTTypeDescription: BitTorrent File
+            UTTypeConformsTo: [public.data]
+            UTTypeTagSpecification:
+              public.filename-extension: [torrent]
+              public.mime-type: [application/x-bittorrent]
+        # "Alternate": Umbra is offered for .torrent files but doesn't take
+        # them over by itself. Settings → General has the button for that.
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: BitTorrent File
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [org.bittorrent.torrent]
+        CFBundleURLTypes:
+          - CFBundleURLName: BitTorrent magnet link
+            CFBundleTypeRole: Viewer
+            CFBundleURLSchemes: [magnet]
+    settings:
+      base:
+        PRODUCT_NAME: Umbra
+        PRODUCT_BUNDLE_IDENTIFIER: com.saltglass.umbra
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Umbra
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
+        # The app's icon, made by scripts/make-icon.swift (App/Assets.xcassets).
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+      configs:
+        # The development build is a different app to macOS, so it never
+        # takes torrent files or magnet links meant for the real one, and
+        # the two can run side by side (their data folders differ too).
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: com.saltglass.umbra.dev
+          INFOPLIST_KEY_CFBundleDisplayName: Umbra Dev
+          # With a "DEV" band, so it is never mistaken for the real one in the Dock.
+          ASSETCATALOG_COMPILER_APPICON_NAME: AppIconDev
+    postBuildScripts:
+      - name: Copy Umbra helper
+        basedOnDependencyAnalysis: false
+        script: |
+          # The app carries Umbra's server program inside it; see scripts/build-helper.sh.
+          SRC="${SRCROOT}/build/helper/umbra"
+          if [ ! -x "$SRC" ]; then
+            echo "error: the Umbra helper has not been built yet. Run 'just helper' first." >&2
+            exit 1
+          fi
+          DEST="${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Helpers"
+          mkdir -p "$DEST"
+          cp -f "$SRC" "$DEST/umbra"
+          # Sign the helper with the same identity as the app (ad hoc "-" for now;
+          # scripts/dist.sh passes a real one later), in hardened mode like the app.
+          # A real identity also needs Apple's secure timestamp (notarization asks for it).
+          STAMP="--timestamp"
+          if [ "${CODE_SIGN_IDENTITY:--}" = "-" ]; then STAMP="--timestamp=none"; fi
+          codesign --force --options runtime $STAMP --sign "${CODE_SIGN_IDENTITY:--}" "$DEST/umbra"
+      - name: Copy third-party licences
+        basedOnDependencyAnalysis: false
+        script: |
+          # The licences of everything inside the app, shown under About Umbra → Licences…
+          # (made by scripts/licenses.sh).
+          SRC="${SRCROOT}/build/licenses/THIRD-PARTY-LICENSES.txt"
+          if [ ! -f "$SRC" ]; then
+            echo "error: the third-party licences have not been made yet. Run 'just licenses' first." >&2
+            exit 1
+          fi
+          DEST="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}"
+          mkdir -p "$DEST"
+          cp -f "$SRC" "$DEST/THIRD-PARTY-LICENSES.txt"
+schemes:
+  Umbra:
+    build:
+      targets:
+        Umbra: all
