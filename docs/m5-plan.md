@@ -151,8 +151,10 @@ Dan asked for the repo on GitHub, public, with a clean history: one
 "Umbra for macOS 0.1.1" commit, as Umbra's own public history began,
 because the working history names the home server's address. No disk
 image is published there (it would be unsigned). `scripts/common.sh`
-now fetches Umbra from GitHub (`UMBRA_REPO` overrides it). Until the
-Umbra commit in `UMBRA_VERSION` is on GitHub, nobody else can build it.
+now fetches Umbra from GitHub (`UMBRA_REPO` overrides it). Later the same day Dan
+asked for Umbra's `next` on GitHub and for the disk image as a download:
+a fresh clone of the public repo builds, and release v0.1.1 on GitHub
+carries the unsigned disk image and its checksum.
 
 ## If it is signed later (not being done now)
 

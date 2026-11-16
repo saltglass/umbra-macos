@@ -31,16 +31,14 @@ There is no build for Intel Macs.
 
 ## Install
 
-Umbra for macOS is not on a download page yet. You get the disk image,
-`Umbra-0.1.1.dmg`, by building it (see "Building from source") or from
-someone who has.
+1. Download `Umbra-0.1.1.dmg` from the
+   [releases page](https://github.com/saltglass/umbra-macos/releases).
+2. Open it and drag Umbra to the Applications folder.
+3. Open Umbra from Applications.
 
-1. Open the disk image and drag Umbra to the Applications folder.
-2. Open Umbra from Applications.
-
-**The app is not signed with an Apple developer certificate.** On the
-Mac that built it, it opens normally. On any other Mac, macOS blocks it
-the first time and says it can't check the app. To allow it: open
+**The app is not signed with an Apple developer certificate.** macOS
+blocks a downloaded copy the first time and says it can't check the
+app. To allow it: open
 System Settings → Privacy & Security, scroll down to the message about
 Umbra, and choose "Open Anyway". macOS asks once and then remembers.
 
@@ -48,9 +46,9 @@ For the same reason, macOS may ask again about folder access, being the
 default app for torrents and opening at login after you install a new
 version.
 
-To check that a copy of the disk image is the one that was built, put
-the `Umbra-0.1.1.dmg.sha256` file made beside it into the same folder
-and run this in Terminal:
+To check that your download is the one that was published, download the
+`Umbra-0.1.1.dmg.sha256` file into the same folder and run this in
+Terminal:
 
 ```sh
 shasum -a 256 -c Umbra-0.1.1.dmg.sha256
@@ -208,9 +206,8 @@ you also need whatever Umbra's own build needs (see "Developing" in
   unless you set `UMBRA_SIGN_IDENTITY` to a Developer ID.
 
 The file `UMBRA_VERSION` names the exact version of Umbra that is built
-in. 0.1.1 is built from a development version of Umbra, newer than
-Umbra 0.3.0; if that version is not in Umbra's public repository yet,
-the build can't fetch it and has to wait for Umbra's next release. Set `UMBRA_SRC` to the folder of your own copy of Umbra's source,
+in; the build fetches it from Umbra's public repository. 0.1.1 is built
+from the last development version before Umbra 0.4.0. Set `UMBRA_SRC` to the folder of your own copy of Umbra's source,
 for example `UMBRA_SRC=~/code/umbra just build`. `just` lists every recipe, and the
 `Justfile` has a comment on each.
 

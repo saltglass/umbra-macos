@@ -5,8 +5,8 @@ interface is Swift; the backend is the real Umbra server, shipped inside
 the app as a helper, so the two keep feature parity.
 
 - Owner: Dan. GPL-3.0 (it bundles Umbra, which is GPL-3.0). Public at
-  github.com/saltglass/umbra-macos since 0.1.1 (2026-11-15), as source
-  only: no download, and not signed by Apple. Dan expects to be its only
+  github.com/saltglass/umbra-macos since 0.1.1 (2026-11-15), with the
+  disk image on its releases page, not signed by Apple. Dan expects to be its only
   user and pays for an Apple Developer account only if that changes.
 - Dan is not a developer. Claude writes nearly all of the code, so the
   code, tests and docs must explain themselves.
