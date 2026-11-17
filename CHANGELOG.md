@@ -2,6 +2,18 @@
 
 What changed in each version of Umbra for macOS, newest first.
 
+## 0.1.2 (2026-11-17)
+
+- **Umbra 0.4.0 inside**, the released version (0.1.1 carried the last
+  development version before it; nothing about how it behaves differs).
+  About now shows "Umbra server 0.4.0".
+- **About has "Source Code" again**, which opens this app's own source
+  on GitHub.
+- **The inspector runs the full height of the window.** The list's
+  buttons and the VPN pill now stop at its edge instead of sitting
+  above it. The search field stays at the window's right-hand edge
+  (where macOS puts it).
+
 ## 0.1.1 (2026-11-15)
 
 The first release.

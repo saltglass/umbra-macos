@@ -35,7 +35,7 @@
       THIRD-PARTY LICENCES
 
       Umbra for macOS is free software under the GNU General Public License,
-      version 3.
+      version 3. Its source code is at https://github.com/saltglass/umbra-macos
 
       ================================================================================
       example-module 1.2.3

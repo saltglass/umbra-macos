@@ -24,7 +24,7 @@ struct MainWindow: View {
   }
 }
 
-/// Sidebar | list (with the inspector beside it), the toolbar and search.
+/// Sidebar | list | inspector (full height), the toolbar and search.
 struct MainSplitView: View {
   let session: AppSession
   @Bindable var model: MainWindowModel
@@ -57,13 +57,24 @@ struct MainSplitView: View {
       // Limits… (a torrent's own speed limits and seed goals)
       .limitsSheet(window: model, session: session)
       .createTorrentSheet(adding?.creating)
-      .inspector(isPresented: $model.inspectorShown) {
-        InspectorHost(session: session, window: model)
-          .inspectorColumnWidth(min: 240, ideal: 280, max: 420)
-      }
+    }
+    // Attached to the whole split view, not the list, so the inspector runs
+    // the full height of the window and the list's buttons and VPN pill end
+    // at its edge. Its own button sits above it, beside the search field.
+    .inspector(isPresented: $model.inspectorShown) {
+      InspectorHost(session: session, window: model)
+        .inspectorColumnWidth(min: 240, ideal: 280, max: 420)
+        .toolbar {
+          Spacer()
+          InspectorToggle(model: model)
+        }
     }
     .navigationTitle(model.title)
     .navigationSubtitle(model.subtitle)
+    // The system puts its search field at the window's far edge, which with
+    // the inspector open is above the inspector. Tried and dropped (0.1.2):
+    // the centre placement (so wide it hid the title and the VPN pill) and a
+    // minimised search button (not available on macOS).
     .searchable(text: $model.searchText, placement: .toolbar, prompt: "Search")
     .searchFocused($searchFocused)
     .onChange(of: model.searchFocusRequests) { searchFocused = true }

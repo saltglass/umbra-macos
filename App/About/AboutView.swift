@@ -2,10 +2,8 @@ import AppKit
 import SwiftUI
 import UmbraKit
 
-/// Where "Umbra on GitHub" goes: the public home of the Umbra server inside
-/// the app. (The Mac app's own source is private for now; if it is published,
-/// this becomes its address and the button "Source Code" again.)
-let sourceCodeAddress = URL(string: "https://github.com/saltglass/umbra")!
+/// Where "Source Code" goes.
+let sourceCodeAddress = URL(string: "https://github.com/saltglass/umbra-macos")!
 
 /// The About Umbra window's contents, in the usual Mac style: the icon, the
 /// name, the versions, a line about what it is, and two buttons. This view
@@ -46,7 +44,7 @@ struct AboutView: View {
         .padding(.top, 2)
 
       HStack(spacing: 10) {
-        Button("Umbra on GitHub", action: onSourceCode)
+        Button("Source Code", action: onSourceCode)
         Button("Licences…", action: onLicences)
       }
       .padding(.top, 16)

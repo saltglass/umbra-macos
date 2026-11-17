@@ -31,7 +31,7 @@ There is no build for Intel Macs.
 
 ## Install
 
-1. Download `Umbra-0.1.1.dmg` from the
+1. Download `Umbra-0.1.2.dmg` from the
    [releases page](https://github.com/saltglass/umbra-macos/releases).
 2. Open it and drag Umbra to the Applications folder.
 3. Open Umbra from Applications.
@@ -47,14 +47,14 @@ default app for torrents and opening at login after you install a new
 version.
 
 To check that your download is the one that was published, download the
-`Umbra-0.1.1.dmg.sha256` file into the same folder and run this in
+`Umbra-0.1.2.dmg.sha256` file into the same folder and run this in
 Terminal:
 
 ```sh
-shasum -a 256 -c Umbra-0.1.1.dmg.sha256
+shasum -a 256 -c Umbra-0.1.2.dmg.sha256
 ```
 
-It should print `Umbra-0.1.1.dmg: OK`.
+It should print `Umbra-0.1.2.dmg: OK`.
 
 Umbra does not update itself. A new version is installed the same way,
 replacing the old app. Your settings and torrents stay
@@ -206,8 +206,7 @@ you also need whatever Umbra's own build needs (see "Developing" in
   unless you set `UMBRA_SIGN_IDENTITY` to a Developer ID.
 
 The file `UMBRA_VERSION` names the exact version of Umbra that is built
-in; the build fetches it from Umbra's public repository. 0.1.1 is built
-from the last development version before Umbra 0.4.0. Set `UMBRA_SRC` to the folder of your own copy of Umbra's source,
+in; the build fetches it from Umbra's public repository. Set `UMBRA_SRC` to the folder of your own copy of Umbra's source,
 for example `UMBRA_SRC=~/code/umbra just build`. `just` lists every recipe, and the
 `Justfile` has a comment on each.
 

@@ -1,15 +1,16 @@
 import SwiftUI
 import UmbraKit
 
-/// The toolbar's buttons: Pause, Resume, Remove, the slow mode switch and
-/// the inspector, with Add first. Only buttons that work appear (Add opens
+/// The toolbar's buttons: Pause, Resume, Remove and the slow mode switch,
+/// with Add first, then the VPN pill. (The inspector's button is
+/// `InspectorToggle`, which sits above the inspector.) Only buttons that work appear (Add opens
 /// the Add sheet, in App/Adding). The sidebar button and the search field are the
 /// system's own.
 struct MainToolbar: ToolbarContent {
   let model: MainWindowModel
   /// Nil while Umbra isn't connected: the buttons are then dimmed.
   let actions: TorrentActions?
-  /// The VPN pill's words (it comes before the inspector button).
+  /// The VPN pill's words.
   let vpn: VpnSummary
   /// Asks Umbra to check the VPN again.
   let onCheckVpn: (() async -> Void)?
@@ -54,14 +55,6 @@ struct MainToolbar: ToolbarContent {
     ToolbarItem(placement: .primaryAction) {
       VpnPillView(summary: vpn, onCheckAgain: onCheckVpn, onStartWithout: onStartWithoutVpn)
     }
-    ToolbarItem(placement: .primaryAction) {
-      Button(
-        model.inspectorShown ? "Hide Inspector" : "Show Inspector", systemImage: "sidebar.trailing"
-      ) {
-        model.inspectorShown.toggle()
-      }
-      .help(model.inspectorShown ? "Hide Inspector" : "Show Inspector")
-    }
   }
 
   private var slowMode: Binding<Bool> {
@@ -72,5 +65,20 @@ struct MainToolbar: ToolbarContent {
 
   private func run(_ action: TorrentActions.Action) {
     Task { await model.perform(action, using: actions) }
+  }
+}
+
+/// The button that shows and hides the inspector. It lives in the
+/// inspector's own part of the toolbar, at the window's trailing edge.
+struct InspectorToggle: View {
+  @Bindable var model: MainWindowModel
+
+  var body: some View {
+    Button(
+      model.inspectorShown ? "Hide Inspector" : "Show Inspector", systemImage: "sidebar.trailing"
+    ) {
+      model.inspectorShown.toggle()
+    }
+    .help(model.inspectorShown ? "Hide Inspector" : "Show Inspector")
   }
 }

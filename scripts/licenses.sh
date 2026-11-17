@@ -98,7 +98,7 @@ UMBRA_MODULE_VERSION="$(printf '%s\n' "$BUILD_INFO" | awk -F'\t' '$2 == "mod" { 
 THIRD-PARTY LICENCES
 
 Umbra for macOS is free software under the GNU General Public License,
-version 3.
+version 3. Its source code is at https://github.com/saltglass/umbra-macos
 It contains the Umbra server program, also under the GNU General Public
 License, version 3 (source code at https://github.com/saltglass/umbra), and
 the free software listed below. Each is under its own licence, which follows
